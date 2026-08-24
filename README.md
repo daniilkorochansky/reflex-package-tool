@@ -40,6 +40,6 @@ The tool uses [XMem Helper](https://github.com/daniilkorochansky/xmem-helper), w
 
 **Note:** Open the same archive again if you want to replace another resource in that archive without losing the previous resource.
 
-# Other Tools
+## Other Tools
 + [Reflex BXML Editor](https://github.com/daniilkorochansky/reflex-bxml-editor): It allows you to edit `.bxml`, `.database`, `.level` and `savegame.bxml` files and rebuild them.
 + [Reflex Font Package Viewer](https://github.com/daniilkorochansky/reflex-font-package-viewer): A tool for viewing and replacing character resources in the `data.fpack` file for the game MX vs ATV Reflex
