@@ -9,6 +9,8 @@
 
 A tool for viewing, exporting, and importing MX vs ATV Reflex game resources from .package game archives.
 
+The tool uses [XMem Helper](https://github.com/daniilkorochansky/xmem-helper), which acts as a bridge between the 32-bit `mszip.dll` library and the 64-bit operating system.
+
 ## Features
 + Open `.package` files.
 + Automatic `.database` detection.
