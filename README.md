@@ -1,5 +1,24 @@
+[![Python](https://img.shields.io/badge/Python-3.x-3776AB)](https://www.python.org/)
+[![Platform](https://img.shields.io/badge/platform-Windows-0078D6)](https://github.com/daniilkorochansky/reflex-package-tool)
+[![Build](https://github.com/daniilkorochansky/reflex-package-tool/actions/workflows/build.yml/badge.svg)](https://github.com/daniilkorochansky/reflex-package-tool/actions/workflows/build.yml)
+[![Latest Release](https://img.shields.io/github/v/release/daniilkorochansky/reflex-package-tool?display_name=tag)](https://github.com/daniilkorochansky/reflex-package-tool/releases)
+[![License](https://img.shields.io/github/license/daniilkorochansky/reflex-package-tool)](https://github.com/daniilkorochansky/reflex-package-tool/blob/main/LICENSE)
 
 # Reflex Package Tool
 <img width="766" height="480" alt="image" src="https://github.com/user-attachments/assets/5b66a57c-6878-444c-97cb-a0e3828662ab" />
 
 A tool for viewing, exporting, and importing MX vs ATV Reflex game resources from .package game archives.
+
+## Features
++ Open `.package` files
++ Automatic `.database` detection
++ Extract resources from packages
++ Replace resources inside packages
++ Repack modified packages
++ Automatic `.database` updating
++ Append-only resource replacement
+
+## Installation
+1. Download the latest release.
+2. Unzip the archive containing `Reflex Package Tool.exe`, `mszip.dll`, `xmem_helper.exe`, and `xmem_compress_helper.exe` into any folder.
+3. Run `Reflex Package Tool.exe`.
