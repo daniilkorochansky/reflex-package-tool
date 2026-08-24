@@ -61,9 +61,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Reflex_Package_Tool_${{ matrix.arch }}
           path: Reflex_Package_Tool_${{ matrix.arch }}.zip
-          compression-level: 0
+          archive: false
 
       - name: Add release assets
         if: startsWith(github.ref, 'refs/tags/v')
