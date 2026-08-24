@@ -10,15 +10,27 @@
 A tool for viewing, exporting, and importing MX vs ATV Reflex game resources from .package game archives.
 
 ## Features
-+ Open `.package` files
-+ Automatic `.database` detection
-+ Extract resources from packages
-+ Replace resources inside packages
-+ Repack modified packages
-+ Automatic `.database` updating
-+ Append-only resource replacement
++ Open `.package` files.
++ Automatic `.database` detection.
++ Extract resources from packages.
++ Replace resources inside packages.
++ Repack modified packages.
++ Automatic `.database` updating.
++ Append-only resource replacement.
+
+## Table Of Contents
+- [Installation](#installation)
+- [Usage](#usage)
 
 ## Installation
 1. Download the latest release.
 2. Unzip the archive containing `Reflex Package Tool.exe`, `mszip.dll`, `xmem_helper.exe`, and `xmem_compress_helper.exe` into any folder.
 3. Run `Reflex Package Tool.exe`.
+
+## Usage
+1. Open the `.package` archive.
+2. Export the necessary resources.
+3. Replace the previously exported resource.
+4. Save the new `.package` and `.database` files to the desired folder, or replace them directly in the `Database` folder within the MX vs ATV Reflex game files.
+
+**Note:** Open the same archive again if you want to replace another resource in that archive without losing the previous resource.
