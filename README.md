@@ -23,6 +23,9 @@ The tool uses [XMem Helper](https://github.com/daniilkorochansky/xmem-helper), w
 ## Table Of Contents
 - [Installation](#installation)
 - [Usage](#usage)
+- [Other Tools](#other-tools)
+  - [Reflex BXML Editor](#other-tools)
+  - [Reflex Font Package Viewer](#other-tools)
 
 ## Installation
 1. Download the latest release.
@@ -36,3 +39,7 @@ The tool uses [XMem Helper](https://github.com/daniilkorochansky/xmem-helper), w
 4. Save the new `.package` and `.database` files to the desired folder, or replace them directly in the `Database` folder within the MX vs ATV Reflex game files.
 
 **Note:** Open the same archive again if you want to replace another resource in that archive without losing the previous resource.
+
+# Other Tools
++ [Reflex BXML Editor](https://github.com/daniilkorochansky/reflex-bxml-editor): It allows you to edit `.bxml`, `.database`, `.level` and `savegame.bxml` files and rebuild them.
++ [Reflex Font Package Viewer](https://github.com/daniilkorochansky/reflex-font-package-viewer): A tool for viewing and replacing character resources in the `data.fpack` file for the game MX vs ATV Reflex
