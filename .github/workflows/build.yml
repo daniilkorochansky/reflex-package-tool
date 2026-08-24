@@ -1,7 +1,7 @@
 name: Build Reflex Package Tool
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  
   push:
     tags:
       - "v*"
