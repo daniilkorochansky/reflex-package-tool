@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/github/license/daniilkorochansky/reflex-package-tool)](https://github.com/daniilkorochansky/reflex-package-tool/blob/main/LICENSE)
 
 # Reflex Package Tool
-<img width="766" height="480" alt="image" src="https://github.com/user-attachments/assets/5b66a57c-6878-444c-97cb-a0e3828662ab" />
+<img width="766" height="474" alt="image" src="https://github.com/user-attachments/assets/68ad4f8e-e078-46a7-81f3-996c815de551" />
 
 A tool for viewing, exporting, and importing MX vs ATV Reflex game resources from .package game archives.
 
