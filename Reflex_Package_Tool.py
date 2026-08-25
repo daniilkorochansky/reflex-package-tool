@@ -1360,7 +1360,7 @@ def extract_resource(
 
 
 # ---------------------------------------------------------------------------
-# Replace support (v16)
+# Replace support
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -1851,23 +1851,20 @@ class MainFrame(wx.Frame):
             self.extract_selected,
         )
 
-    def open_package(self, event=None):
+    def open_package(self, event=None, package_path=None):
         wildcard = (
             "MX vs ATV Reflex Package (*.package)|*.package|"
             "All files (*.*)|*.*"
         )
 
-        with wx.FileDialog(
-            self,
-            "Open Package",
-            wildcard=wildcard,
-            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
-        ) as dialog:
+        if package_path is not None:
+            package = Path(package_path)
+        else:
+            with wx.FileDialog(self,"Open Package",wildcard=wildcard,style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST) as dialog:
+                if dialog.ShowModal() != wx.ID_OK:
+                    return
 
-            if dialog.ShowModal() != wx.ID_OK:
-                return
-
-            package = Path(dialog.GetPath())
+                package = Path(dialog.GetPath())
 
         database = package.with_suffix(".database")
 
@@ -2165,6 +2162,8 @@ class MainFrame(wx.Frame):
             wx.OK | wx.ICON_INFORMATION,
         )
 
+        self.open_package(package_path=packed_package)
+
     def on_exit(self, event=None):
         self.Close()
 
@@ -2172,7 +2171,7 @@ class MainFrame(wx.Frame):
     def show_about(self, event=None):
         wx.MessageBox(
             f"{APP_NAME}\n\n"
-            "A tool for working with .package game archives.\n\nVersion: 1.1.0\nAuthor: Daniil Korochansky\nLicense: GNU General Public License v3.0",
+            "A tool for working with .package game archives.\n\nVersion: 1.1.1\nAuthor: Daniil Korochansky\nLicense: GNU General Public License v3.0",
             "About",
             wx.OK | wx.ICON_INFORMATION,
         )
