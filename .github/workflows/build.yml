@@ -51,7 +51,7 @@ jobs:
             --name "Reflex Package Tool" ^
             --icon "icon.ico" ^
             --version-file "version_info.txt" ^
-            Reflex_Package_Tool.py
+            reflex_package_tool.py
 
       - name: Package ZIP
         shell: pwsh
