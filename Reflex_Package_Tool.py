@@ -1678,6 +1678,456 @@ def build_mode1_package(
 
 
 # ---------------------------------------------------------------------------
+# Package defragmentation
+# ---------------------------------------------------------------------------
+
+def read_package_block(package: Path, resource: Resource, mode: int) -> bytes:
+    """Read the complete physical block referenced by a Database resource."""
+    offset = resource.info.offset
+    package_size = package.stat().st_size
+    if offset < 0 or offset >= package_size:
+        raise ValueError(f"Resource #{resource.index} points outside the Package: 0x{offset:X}")
+
+    if resource.asset is not None and not resource.asset.compressed:
+        if resource.asset.heap_size is None:
+            raise ValueError(f"Uncompressed resource #{resource.index} has no Heap.size.")
+        block_size = int(resource.asset.heap_size)
+        if block_size <= 0:
+            raise ValueError(f"Invalid Heap.size for resource #{resource.index}: {block_size}")
+    else:
+        with package.open("rb") as f:
+            f.seek(offset)
+            raw = f.read(4)
+        if len(raw) != 4:
+            raise ValueError(f"Cannot read FILE_ZSIZE for resource #{resource.index}")
+        file_zsize = struct.unpack("<I", raw)[0]
+        if file_zsize < 4:
+            raise ValueError(f"Invalid FILE_ZSIZE {file_zsize} for resource #{resource.index}")
+        block_size = file_zsize + 4 if mode == 0 else file_zsize
+
+    if offset + block_size > package_size:
+        raise ValueError(f"Resource #{resource.index} exceeds Package.")
+
+    with package.open("rb") as f:
+        f.seek(offset)
+        block = f.read(block_size)
+    if len(block) != block_size:
+        raise IOError(f"Could not read complete block for resource #{resource.index}")
+    return block
+
+
+def _database_info_records(parsed):
+    raw = parsed.raw
+    info_off = parsed.header.pool_pointer
+    info_end = info_off + parsed.header.pool_size
+    records = {}
+    pos = info_off
+    base_offset = 0
+    index = 0
+    while pos + 12 <= info_end:
+        record_pos = pos
+        relative_offset, size, _zero = struct.unpack_from("<III", raw, pos)
+        pos += 12
+        if size == 0:
+            base_offset = relative_offset
+            continue
+        if pos + 8 > info_end:
+            raise ValueError("Database INFO region is truncated.")
+        pos += 8
+        records[index] = {
+            "record_pos": record_pos,
+            "base_offset": base_offset,
+            "absolute_offset": relative_offset + base_offset,
+            "stored_size": size,
+        }
+        index += 1
+    if pos != info_end and any(raw[pos:info_end]):
+        raise ValueError("Database INFO region has unexpected non-zero data.")
+    return records
+
+
+def _patch_database_for_defragment(database: Path, relocations, resources):
+    """Patch INFO, Package.offset and Heap.offset/size for a compacted Package.
+
+    Database stores Heap.offset relative to its containing Package.offset.
+    During defragmentation Package.offset values move as well, so Heap.offset
+    cannot simply be calculated against the original Package offset.
+
+    The INFO table uses the same base-offset concept: records with SIZE == 0
+    establish BASE_OFF for the following records. Those base records must be
+    relocated together with their corresponding Database Package offsets.
+    """
+    tool = load_bxml_database_tool(database)
+    parsed = tool.decode(str(database))
+    raw = bytearray(parsed.raw)
+    entries = tool.database_assets(parsed)
+
+    if len(entries) != len(resources):
+        raise ValueError(
+            "Database resource count changed unexpectedly: "
+            f"database={len(entries)}, tool={len(resources)}"
+        )
+
+    h = parsed.header
+    pool_start = h.pool_pointer
+    pool_end = h.pool_pointer + h.pool_size
+
+    def pool_pos(attr):
+        if not attr.uses_pool:
+            raise ValueError("Expected numeric BXML pool attribute.")
+        pos = pool_start + attr.value
+        if pos < pool_start or pos + 4 > pool_end:
+            raise ValueError("BXML numeric pool reference is out of range.")
+        return pos
+
+    def pool_u32(attr):
+        return struct.unpack_from("<I", raw, pool_pos(attr))[0]
+
+    def patch_pool_u32(attr, value, label):
+        _patch_u32(raw, pool_pos(attr), value, label)
+
+    # ------------------------------------------------------------------
+    # 1. Determine the new Package.offset for every original Package base.
+    # ------------------------------------------------------------------
+    # A Database Asset already exposes the Package.offset used to calculate
+    # its absolute Heap position. Group resources by that original base and
+    # place the new Package base at the first compacted block belonging to it.
+    package_new_offsets = {}
+    for resource in resources:
+        relocation = relocations.get(resource.index)
+        if relocation is None or resource.asset is None:
+            continue
+
+        old_package_offset = int(resource.asset.package_offset)
+        new_absolute, _new_size = relocation
+
+        current = package_new_offsets.get(old_package_offset)
+        if current is None or new_absolute < current:
+            package_new_offsets[old_package_offset] = new_absolute
+
+    if not package_new_offsets:
+        raise ValueError("Could not determine Database Package offsets.")
+
+    # ------------------------------------------------------------------
+    # 2. Locate Package nodes and patch their offset attributes.
+    # ------------------------------------------------------------------
+    package_offset_attrs = {}
+
+    for node_index, node in enumerate(parsed.nodes):
+        if parsed.strings[node.name] != "Package":
+            continue
+
+        attrs = parsed.attrs[node.attr_index:node.attr_index + node.attr_count]
+        offset_attr = next(
+            (
+                attr for attr in attrs
+                if parsed.strings[attr.name] == "offset"
+                and attr.uses_pool
+            ),
+            None,
+        )
+
+        if offset_attr is None:
+            continue
+
+        old_offset = pool_u32(offset_attr)
+        new_offset = package_new_offsets.get(old_offset)
+
+        if new_offset is None:
+            # Package nodes without resources represented in the current ToC
+            # are left untouched. This is safer than inventing a new base.
+            continue
+
+        patch_pool_u32(
+            offset_attr,
+            new_offset,
+            f"Package offset for 0x{old_offset:X}",
+        )
+        package_offset_attrs[node_index] = (old_offset, new_offset)
+
+    # ------------------------------------------------------------------
+    # 3. Locate Heap nodes and patch Heap.offset/size using the NEW package
+    #    base, not the original one.
+    # ------------------------------------------------------------------
+    parent = [None] * len(parsed.nodes)
+    for parent_index, node in enumerate(parsed.nodes):
+        for child_index in range(node.level, node.level + node.children):
+            if 0 <= child_index < len(parent):
+                parent[child_index] = parent_index
+
+    relocation_by_old = {
+        resource.info.offset: (resource.index, relocations[resource.index])
+        for resource in resources
+        if resource.index in relocations
+    }
+
+    patched_assets = set()
+
+    for node_index, node in enumerate(parsed.nodes):
+        if parsed.strings[node.name] != "Heap":
+            continue
+
+        attrs = parsed.attrs[node.attr_index:node.attr_index + node.attr_count]
+        attr_map = {parsed.strings[attr.name]: attr for attr in attrs}
+        offset_attr = attr_map.get("offset")
+        size_attr = attr_map.get("size")
+
+        if offset_attr is None or not offset_attr.uses_pool:
+            continue
+
+        # Find the containing Package node.
+        cur = parent[node_index]
+        package_node_index = None
+        while cur is not None:
+            if parsed.strings[parsed.nodes[cur].name] == "Package":
+                package_node_index = cur
+                break
+            cur = parent[cur]
+
+        if package_node_index is None:
+            continue
+
+        package_pair = package_offset_attrs.get(package_node_index)
+        if package_pair is None:
+            continue
+
+        old_package_offset, new_package_offset = package_pair
+        old_heap_offset = pool_u32(offset_attr)
+        old_absolute = old_package_offset + old_heap_offset
+
+        match = relocation_by_old.get(old_absolute)
+        if match is None:
+            continue
+
+        resource_index, (new_absolute, new_stored_size) = match
+        new_heap_offset = new_absolute - new_package_offset
+
+        if new_heap_offset < 0:
+            raise ValueError(
+                f"New Heap offset for resource #{resource_index} is negative."
+            )
+
+        patch_pool_u32(
+            offset_attr,
+            new_heap_offset,
+            f"Heap offset for resource #{resource_index}",
+        )
+
+        if size_attr is not None and size_attr.uses_pool:
+            patch_pool_u32(
+                size_attr,
+                new_stored_size,
+                f"Heap size for resource #{resource_index}",
+            )
+
+        patched_assets.add(resource_index)
+
+    missing = set(relocations) - patched_assets
+    if missing:
+        raise ValueError(
+            "Could not locate Database Heap entries for resource(s): "
+            + ", ".join(f"#{i}" for i in sorted(missing))
+        )
+
+    # ------------------------------------------------------------------
+    # 4. Patch the binary INFO table.
+    #
+    # SIZE == 0 records establish BASE_OFF. They correspond to .package
+    # offsets. Every normal INFO record then stores OFFSET relative to that
+    # base. Relocate both parts so INFO and Packages/Package/Heap remain
+    # internally consistent.
+    # ------------------------------------------------------------------
+    info_off = h.pool_pointer
+    info_end = info_off + h.pool_size
+    pos = info_off
+    current_old_base = 0
+    current_new_base = 0
+    resource_index = 0
+
+    while pos + 12 <= info_end:
+        record_pos = pos
+        relative_offset, size, _zero = struct.unpack_from(
+            "<III",
+            raw,
+            pos,
+        )
+        pos += 12
+
+        if size == 0:
+            current_old_base = relative_offset
+            current_new_base = package_new_offsets.get(
+                current_old_base,
+                current_old_base,
+            )
+            _patch_u32(
+                raw,
+                record_pos,
+                current_new_base,
+                f"INFO base offset 0x{current_old_base:X}",
+            )
+            continue
+
+        if pos + 8 > info_end:
+            raise ValueError("Database INFO region is truncated.")
+
+        pos += 8
+
+        if resource_index >= len(resources):
+            raise ValueError("Database INFO/resource count mismatch.")
+
+        resource = resources[resource_index]
+        relocation = relocations.get(resource.index)
+        if relocation is None:
+            raise ValueError(
+                f"Missing relocation for INFO resource #{resource.index}"
+            )
+
+        new_absolute, new_stored_size = relocation
+        new_relative = new_absolute - current_new_base
+
+        if new_relative < 0:
+            raise ValueError(
+                f"New INFO offset for resource #{resource.index} is negative."
+            )
+
+        _patch_u32(
+            raw,
+            record_pos,
+            new_relative,
+            f"INFO offset for resource #{resource.index}",
+        )
+        _patch_u32(
+            raw,
+            record_pos + 4,
+            new_stored_size,
+            f"INFO size for resource #{resource.index}",
+        )
+
+        resource_index += 1
+
+    if pos != info_end and any(raw[pos:info_end]):
+        raise ValueError("Database INFO region has unexpected non-zero trailing data.")
+
+    if resource_index != len(resources):
+        raise ValueError(
+            "Database INFO/resource count mismatch: "
+            f"INFO={resource_index}, resources={len(resources)}"
+        )
+
+    compressed = zlib.compress(bytes(raw))
+    header = struct.pack(
+        "<9I",
+        parsed.header.signature,
+        parsed.header.version,
+        parsed.header.str_count,
+        parsed.header.pool_pointer,
+        parsed.header.pool_size,
+        parsed.header.attr_count,
+        parsed.header.node_count,
+        parsed.header.unknown,
+        len(compressed),
+    )
+    return header + compressed
+
+def build_defragmented_package(package, database, resources, mode, output_package, output_database, progress_callback=None):
+    if progress_callback is None:
+        progress_callback = lambda value: None
+    if mode not in (0, 1):
+        raise ValueError(f"Unsupported Package mode: {mode}")
+    if not resources:
+        raise ValueError("Database does not contain any resources.")
+
+    unique = {}
+    total = max(len(resources), 1)
+    for pos, resource in enumerate(resources, 1):
+        if resource.info.offset not in unique:
+            unique[resource.info.offset] = read_package_block(package, resource, mode)
+        progress_callback(int(pos * 40 / total))
+
+    ordered = sorted(unique.items(), key=lambda item: item[0])
+    relocations = {}
+    current_offset = 12
+    for old_offset, block in ordered:
+        for resource in resources:
+            if resource.info.offset == old_offset:
+                relocations[resource.index] = (current_offset, len(block))
+        current_offset += len(block)
+
+    with package.open("rb") as source, output_package.open("wb") as target:
+        header = source.read(12)
+        if len(header) != 12:
+            raise ValueError("Package header is truncated.")
+        target.write(header)
+        for _, block in ordered:
+            target.write(block)
+    progress_callback(55)
+
+    output_database.write_bytes(_patch_database_for_defragment(database, relocations, resources))
+    progress_callback(60)
+    return output_package, output_database, relocations
+
+
+def verify_defragmented_package(original_package, original_database, new_package, new_database, resources, mode, progress_callback=None):
+    if progress_callback is None:
+        progress_callback = lambda value: None
+    if detect_mode(new_package)[0] != mode:
+        raise ValueError("Verification failed: Package mode changed unexpectedly.")
+
+    tool = load_bxml_database_tool(new_database)
+    parsed = tool.decode(str(new_database))
+    entries = tool.database_assets(parsed)
+    if len(entries) != len(resources):
+        raise ValueError(f"Verification failed: resource count changed ({len(resources)} -> {len(entries)}).")
+    new_by_index = {int(e["index"]): e for e in entries}
+    if set(new_by_index) != {r.index for r in resources}:
+        raise ValueError("Verification failed: Database resource indices changed.")
+
+    cache = {}
+    total = max(len(resources), 1)
+    for pos, resource in enumerate(resources, 1):
+        if resource.info.offset not in cache:
+            cache[resource.info.offset] = read_package_block(original_package, resource, mode)
+        expected = cache[resource.info.offset]
+        entry = new_by_index[resource.index]
+        new_offset = int(entry["absolute_offset"])
+        if new_offset < 12 or new_offset + len(expected) > new_package.stat().st_size:
+            raise ValueError(f"Verification failed for resource #{resource.index}: block is outside the new Package.")
+        with new_package.open("rb") as f:
+            f.seek(new_offset)
+            actual = f.read(len(expected))
+        if actual != expected:
+            raise ValueError(f"Verification failed for resource #{resource.index}: package block data differs.")
+        heap_size = entry.get("heap_size")
+        if heap_size is not None and int(heap_size) != len(expected):
+            raise ValueError(f"Verification failed for resource #{resource.index}: database Heap.size is incorrect.")
+        progress_callback(int(pos * 95 / total))
+
+    expected_size = 12 + sum(len(block) for block in cache.values())
+    if new_package.stat().st_size != expected_size:
+        raise ValueError("Verification failed: unexpected trailing data in the new .package.")
+
+    progress_callback(100)
+
+
+class DefragmentDialog(wx.Dialog):
+    def __init__(self, parent):
+        super().__init__(parent, title="Optimization", size=(430, 145), style=(wx.DEFAULT_DIALOG_STYLE & ~wx.CLOSE_BOX) | wx.RESIZE_BORDER)
+        panel = wx.Panel(self)
+        root = wx.BoxSizer(wx.VERTICAL)
+        self.status = wx.StaticText(panel, label="Optimization...")
+        self.progress = wx.Gauge(panel, range=100, style=wx.GA_HORIZONTAL)
+        root.Add(self.status, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 14)
+        root.Add(self.progress, 0, wx.EXPAND | wx.ALL, 14)
+        panel.SetSizer(root)
+        self.CentreOnParent()
+
+    def set_status(self, text):
+        self.status.SetLabel(text)
+
+    def set_progress(self, value):
+        self.progress.SetValue(max(0, min(100, int(value))))
+
+# ---------------------------------------------------------------------------
 # GUI
 # ---------------------------------------------------------------------------
 
@@ -1753,9 +2203,9 @@ class MainFrame(wx.Frame):
         file_exit = file_menu.Append(wx.ID_EXIT, "Exit")
         menu_bar.Append(file_menu, "File")
 
-##        tools_menu = wx.Menu()
-##        tools_refresh = tools_menu.Append(wx.ID_ANY, "Refresh")
-##        menu_bar.Append(tools_menu, "Tools")
+        tools_menu = wx.Menu()
+        file_defragment = tools_menu.Append(wx.ID_ANY, "Package Optimization")
+        menu_bar.Append(tools_menu, "Tools")
 
         help_menu = wx.Menu()
         help_about = help_menu.Append(wx.ID_ABOUT, "About")
@@ -1766,6 +2216,7 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self.open_package, file_open)
         self.Bind(wx.EVT_MENU, self.extract_selected, file_extract)
         self.Bind(wx.EVT_MENU, self.pack, file_pack)
+        self.Bind(wx.EVT_MENU, self.defragment, file_defragment)
         self.Bind(wx.EVT_MENU, self.on_exit, file_exit)
         self.Bind(wx.EVT_MENU, self.show_about, help_about)
 
@@ -1860,7 +2311,7 @@ class MainFrame(wx.Frame):
         if package_path is not None:
             package = Path(package_path)
         else:
-            with wx.FileDialog(self,"Open Package",wildcard=wildcard,style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST) as dialog:
+            with wx.FileDialog(self,"Open .package",wildcard=wildcard,style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST) as dialog:
                 if dialog.ShowModal() != wx.ID_OK:
                     return
 
@@ -2164,6 +2615,74 @@ class MainFrame(wx.Frame):
 
         self.open_package(package_path=packed_package)
 
+    def defragment(self, event=None):
+        if self.package is None or self.database is None:
+            wx.MessageBox("Open a Package first.", "Optimization", wx.OK | wx.ICON_INFORMATION)
+            return
+        if not self.resources:
+            wx.MessageBox("The current .database does not contain any resources.", "Optimization", wx.OK | wx.ICON_INFORMATION)
+            return
+
+        dialog = DefragmentDialog(self)
+        self.Enable(False)
+        temp_dir = Path(tempfile.mkdtemp(prefix="reflex_optimization_"))
+        temp_package = temp_dir / self.package.name
+        temp_database = temp_dir / self.database.name
+
+        def cleanup():
+            try:
+                for path in temp_dir.iterdir():
+                    if path.is_file():
+                        path.unlink()
+                temp_dir.rmdir()
+            except Exception:
+                pass
+
+        def success():
+            dialog.EndModal(wx.ID_OK)
+            dialog.Destroy()
+            self.Enable(True)
+            self.Raise()
+            wx.MessageBox("Optimization completed successfully.\n\nVerification passed successfully.", "Optimization", wx.OK | wx.ICON_INFORMATION)
+
+            with wx.FileDialog(self, "Save Optimized Package", defaultDir=str(self.package.parent), defaultFile=f"{self.package.stem}{self.package.suffix}", wildcard="MX vs ATV Reflex Package (*.package)|*.package|All files (*.*)|*.*", style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as save_dialog:
+                if save_dialog.ShowModal() != wx.ID_OK:
+                    cleanup()
+                    return
+                output_package = Path(save_dialog.GetPath())
+                output_database = output_package.with_suffix(".database")
+                try:
+                    output_package.write_bytes(temp_package.read_bytes())
+                    output_database.write_bytes(temp_database.read_bytes())
+                except Exception as exc:
+                    wx.MessageBox(str(exc), "Save failed", wx.OK | wx.ICON_ERROR)
+                    cleanup()
+                    return
+            cleanup()
+            self.open_package(package_path=output_package)
+
+        def failure(message):
+            dialog.EndModal(wx.ID_CANCEL)
+            dialog.Destroy()
+            self.Enable(True)
+            self.Raise()
+            cleanup()
+            wx.MessageBox(message, "Optimization failed", wx.OK | wx.ICON_ERROR)
+
+        def worker():
+            try:
+                build_defragmented_package(self.package, self.database, self.resources, self.mode, temp_package, temp_database, progress_callback=lambda v: wx.CallAfter(dialog.set_progress, v))
+                wx.CallAfter(dialog.set_status, "Verification...")
+                wx.CallAfter(dialog.set_progress, 0)
+                verify_defragmented_package(self.package, self.database, temp_package, temp_database, self.resources, self.mode, progress_callback=lambda v: wx.CallAfter(dialog.set_progress, v))
+                wx.CallAfter(success)
+            except Exception as exc:
+                wx.CallAfter(failure, str(exc))
+
+        import threading
+        threading.Thread(target=worker, name="ReflexPackageOptimization", daemon=True).start()
+        dialog.ShowModal()
+
     def on_exit(self, event=None):
         self.Close()
 
@@ -2171,7 +2690,7 @@ class MainFrame(wx.Frame):
     def show_about(self, event=None):
         wx.MessageBox(
             f"{APP_NAME}\n\n"
-            "A tool for working with .package game archives.\n\nVersion: 1.1.1\nAuthor: Daniil Korochansky\nLicense: GNU General Public License v3.0",
+            "A tool for working with .package game archives.\n\nVersion: 1.2.0\nAuthor: Daniil Korochansky\nLicense: GNU General Public License v3.0",
             "About",
             wx.OK | wx.ICON_INFORMATION,
         )
