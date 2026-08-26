@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/github/license/daniilkorochansky/reflex-package-tool)](https://github.com/daniilkorochansky/reflex-package-tool/blob/main/LICENSE)
 
 # Reflex Package Tool
-<img width="766" height="480" alt="image" src="https://github.com/user-attachments/assets/5b66a57c-6878-444c-97cb-a0e3828662ab" />
+<img width="766" height="474" alt="image" src="https://github.com/user-attachments/assets/68ad4f8e-e078-46a7-81f3-996c815de551" />
 
 A tool for viewing, exporting, and importing MX vs ATV Reflex game resources from .package game archives.
 
@@ -16,13 +16,14 @@ The tool uses [XMem Helper](https://github.com/daniilkorochansky/xmem-helper), w
 + Automatic `.database` detection.
 + Extract resources from packages.
 + Replace resources inside packages.
-+ Repack modified packages.
++ Package optimization.
 + Automatic `.database` updating.
 + Append-only resource replacement.
 
 ## Table Of Contents
 - [Installation](#installation)
 - [Usage](#usage)
+- [Package Optimization](#package-optimization)
 - [Other Tools](#other-tools)
   - [Reflex BXML Editor](#other-tools)
   - [Reflex Font Package Viewer](#other-tools)
@@ -37,6 +38,9 @@ The tool uses [XMem Helper](https://github.com/daniilkorochansky/xmem-helper), w
 2. Export the necessary resources.
 3. Replace the previously exported resource.
 4. Save the new `.package` and `.database` files to the desired folder, or replace them directly in the `Database` folder within the MX vs ATV Reflex game files.
+
+## Package Optimization
+Optimizing the .package file by repackaging the used data blocks into a new .package archive, thereby eliminating unused data blocks. As a result, the .package archive contains only the data that is actually used, which also reduces the size of the archive itself.
 
 ## Other Tools
 + [Reflex BXML Editor](https://github.com/daniilkorochansky/reflex-bxml-editor): It allows you to edit `.bxml`, `.database`, `.level` and `savegame.bxml` files and rebuild them.
