@@ -1227,7 +1227,7 @@ def unpack_resource(
                     f"{len(output)}"
                 )
             
-            if resource.asset.type == "script" or resource.asset.type == "perfdat" or resource.asset.type == "material" or resource.asset.type == "uicmpnt" or resource.asset.type == "bxml" or resource.asset.type == "adv":
+            if resource.asset.type == "script":
                 output = output[:size_check] #Remove padding bytes from clear data
 
         return bytes(output), file_zsize
@@ -2727,7 +2727,7 @@ class MainFrame(wx.Frame):
     def show_about(self, event=None):
         wx.MessageBox(
             f"{APP_NAME}\n\n"
-            "A tool for working with .package game archives.\n\nVersion: 1.2.2\nAuthor: Daniil Korochansky\nLicense: GNU General Public License v3.0",
+            "A tool for working with .package game archives.\n\nVersion: 1.2.3\nAuthor: Daniil Korochansky\nLicense: GNU General Public License v3.0",
             "About",
             wx.OK | wx.ICON_INFORMATION,
         )
