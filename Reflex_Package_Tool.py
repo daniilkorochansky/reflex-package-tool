@@ -53,12 +53,26 @@ def resource_path(relative_path):
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 
-SOURCE_VERSION = "v1.1.0"
+SOURCE_VERSION = "v1.2.1"
 BXML_HEADER = struct.Struct("<9I")
 BXML_SIGNATURE = 0x4C4D5842
 ATTR_STRUCT = struct.Struct("<IIHH")
 NODE_STRUCT = struct.Struct("<IiIIIIII")
 
+
+class PackageDropTarget(wx.FileDropTarget):
+    def __init__(self, window):
+        super().__init__()
+        self.window = window
+
+    def OnDropFiles(self, x, y, filenames):
+        valid_files = [f for f in filenames if f.lower().endswith(".package")]
+
+        if valid_files:
+            self.window.handle_dropped_files(valid_files[0])
+            return True
+        else:
+            return False
 
 # ---------------------------------------------------------------------------
 # BXML / database
@@ -1212,8 +1226,9 @@ def unpack_resource(
                     f"SIZE_CHECK {size_check} exceeds decoded size "
                     f"{len(output)}"
                 )
-
-            output = output[:size_check]
+            
+            if resource.asset.type == "script" or resource.asset.type == "perfdat" or resource.asset.type == "material" or resource.asset.type == "uicmpnt" or resource.asset.type == "bxml" or resource.asset.type == "adv":
+                output = output[:size_check] #Remove padding bytes from clear data
 
         return bytes(output), file_zsize
 
@@ -1255,6 +1270,21 @@ def resource_file_name(resource: Resource):
             resource.asset.type,
             "bin",
         )
+
+        if typ.lower().lstrip(".") == "script":
+            typ = "lua"
+
+        elif typ.lower().lstrip(".") == "perfdat":
+            typ = "bxml"
+
+        elif typ.lower().lstrip(".") == "uicmpnt":
+            typ = "bxml"
+
+        elif typ.lower().lstrip(".") == "material":
+            typ = "bxml"
+
+        elif typ.lower().lstrip(".") == "adv":
+            typ = "bxml"
 
         return f"{base}.{typ}"
 
@@ -2147,13 +2177,16 @@ class MainFrame(wx.Frame):
         self._build_ui()
         self.Centre()
 
+    def handle_dropped_files(self, file):
+        self.open_package(self, package_path=file)
+
     def _build_ui(self):
         panel = wx.Panel(self)
         root = wx.BoxSizer(wx.VERTICAL)
 
         toolbar = wx.ToolBar(
             panel,
-            style=wx.TB_HORIZONTAL | wx.TB_TEXT,
+            style=wx.TB_HORIZONTAL | wx.TB_TEXT | wx.TB_FLAT | wx.TB_NODIVIDER,
         )
 
         self.tool_open = toolbar.AddTool(
@@ -2164,7 +2197,7 @@ class MainFrame(wx.Frame):
                 wx.ART_TOOLBAR,
             ),
         )
-
+        toolbar.AddSeparator()
         self.tool_extract = toolbar.AddTool(
             wx.ID_ANY,
             "Extract",
@@ -2173,8 +2206,6 @@ class MainFrame(wx.Frame):
                 wx.ART_TOOLBAR,
             ),
         )
-
-        toolbar.AddSeparator()
 
         self.tool_pack = toolbar.AddTool(
             wx.ID_ANY,
@@ -2269,10 +2300,14 @@ class MainFrame(wx.Frame):
 
         panel.SetSizer(root)
 
+        drop_target = PackageDropTarget(self)
+        self.list.SetDropTarget(drop_target)
+
         self.statusbar = self.CreateStatusBar(2)
         self.SetStatusText("No package", 0)
         self.SetStatusText("0 resources", 1)
         self.statusbar.SetStatusWidths([-1, 220])
+        self.statusbar.WindowStyle ^= wx.STB_SHOW_TIPS
 
         self.Bind(
             wx.EVT_TOOL,
@@ -2423,6 +2458,8 @@ class MainFrame(wx.Frame):
             1,
         )
 
+        self.statusbar.SetToolTip(f"{package.resolve()}")
+
     def selected_resource(self):
         row = self.list.GetSelectedRow()
 
@@ -2501,7 +2538,7 @@ class MainFrame(wx.Frame):
             wx.ID_ANY,
             "Replace",
         )
-
+        menu.AppendSeparator()
         copy_item = menu.Append(
             wx.ID_ANY,
             "Copy Resource Name",
@@ -2690,7 +2727,7 @@ class MainFrame(wx.Frame):
     def show_about(self, event=None):
         wx.MessageBox(
             f"{APP_NAME}\n\n"
-            "A tool for working with .package game archives.\n\nVersion: 1.2.0\nAuthor: Daniil Korochansky\nLicense: GNU General Public License v3.0",
+            "A tool for working with .package game archives.\n\nVersion: 1.2.1\nAuthor: Daniil Korochansky\nLicense: GNU General Public License v3.0",
             "About",
             wx.OK | wx.ICON_INFORMATION,
         )
@@ -2720,6 +2757,7 @@ class ReflexPackageApp(wx.App):
         self.frame.SetMinSize((780, 440))
         self.frame.SetSize((780, 640))
         self.frame.SetIcon(wx.Icon(resource_path("icon.ico")))
+        
         self.frame.Show()
         return True
 
