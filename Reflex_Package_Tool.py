@@ -53,7 +53,7 @@ def resource_path(relative_path):
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 
-SOURCE_VERSION = "v1.2.1"
+SOURCE_VERSION = "v1.2.2"
 BXML_HEADER = struct.Struct("<9I")
 BXML_SIGNATURE = 0x4C4D5842
 ATTR_STRUCT = struct.Struct("<IIHH")
@@ -1332,7 +1332,7 @@ def extract_resource(
     filename = resource_file_name(resource)
 
     # Hide the internal .script payload-size header from extracted files.
-    if filename.lower().endswith(".script"):
+    if filename.lower().endswith(".lua"):
         decoded = process_script_extract(decoded)
 
     resource_path = folder / filename
@@ -2727,7 +2727,7 @@ class MainFrame(wx.Frame):
     def show_about(self, event=None):
         wx.MessageBox(
             f"{APP_NAME}\n\n"
-            "A tool for working with .package game archives.\n\nVersion: 1.2.1\nAuthor: Daniil Korochansky\nLicense: GNU General Public License v3.0",
+            "A tool for working with .package game archives.\n\nVersion: 1.2.2\nAuthor: Daniil Korochansky\nLicense: GNU General Public License v3.0",
             "About",
             wx.OK | wx.ICON_INFORMATION,
         )
