@@ -53,7 +53,7 @@ def resource_path(relative_path):
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 
-SOURCE_VERSION = "v1.2.2"
+SOURCE_VERSION = "v1.2.3"
 BXML_HEADER = struct.Struct("<9I")
 BXML_SIGNATURE = 0x4C4D5842
 ATTR_STRUCT = struct.Struct("<IIHH")
@@ -583,12 +583,134 @@ def xmem_compress(data: bytes) -> bytes:
         return output_path.read_bytes()
 
 
-def pack_mode0_resource(decoded: bytes) -> bytes:
+def read_mode0_size_check_and_decoded_size(
+    package: Path,
+    resource: "Resource",
+) -> tuple[int, int]:
     """
-    Build one package resource.
+    Read the original MODE 0 resource layout.
+
+    Returns:
+        (SIZE_CHECK, decoded_allocation_size)
+
+    SIZE_CHECK is the logical resource size stored after the XMEM chunk
+    stream. decoded_allocation_size is the total SIZE of all chunks.
+
+    Reflex can allocate a full 64 KiB XMEM block for a texture while the
+    actual DDS resource is smaller. Those trailing bytes are zero padding
+    and must remain part of the XMEM input. SIZE_CHECK must nevertheless
+    remain the original logical size.
+    """
+    if resource.asset is not None and not resource.asset.compressed:
+        raise ValueError(
+            f"Resource #{resource.index} is not package-compressed."
+        )
+
+    with package.open("rb") as f:
+        f.seek(resource.info.offset)
+
+        raw = f.read(4)
+        if len(raw) != 4:
+            raise ValueError(
+                f"Cannot read FILE_ZSIZE for resource #{resource.index}."
+            )
+
+        file_zsize = struct.unpack("<I", raw)[0]
+
+        if file_zsize < 4:
+            raise ValueError(
+                f"Invalid FILE_ZSIZE {file_zsize} for resource "
+                f"#{resource.index}."
+            )
+
+        resource_end = resource.info.offset + file_zsize
+
+        if resource_end > package.stat().st_size:
+            raise ValueError(
+                f"Resource #{resource.index} exceeds Package."
+            )
+
+        current = resource.info.offset + 4
+        decoded_allocation_size = 0
+
+        while current < resource_end:
+            f.seek(current)
+            header = f.read(8)
+
+            if len(header) != 8:
+                raise ValueError(
+                    f"Truncated MODE 0 chunk for resource "
+                    f"#{resource.index}."
+                )
+
+            size, zsize = struct.unpack("<II", header)
+
+            if size <= 0 or zsize <= 0:
+                raise ValueError(
+                    f"Invalid chunk sizes for resource "
+                    f"#{resource.index}: SIZE={size}, ZSIZE={zsize}"
+                )
+
+            data_end = current + 8 + zsize
+
+            if data_end > resource_end:
+                raise ValueError(
+                    f"MODE 0 chunk exceeds resource "
+                    f"#{resource.index}."
+                )
+
+            decoded_allocation_size += size
+            current = data_end
+
+        if current != resource_end:
+            raise ValueError(
+                f"Invalid MODE 0 chunk stream for resource "
+                f"#{resource.index}."
+            )
+
+        f.seek(resource_end)
+        raw_size_check = f.read(4)
+
+        if len(raw_size_check) != 4:
+            raise ValueError(
+                f"Missing SIZE_CHECK for resource #{resource.index}."
+            )
+
+        size_check = struct.unpack("<I", raw_size_check)[0]
+
+    if size_check > decoded_allocation_size:
+        raise ValueError(
+            f"Original SIZE_CHECK {size_check} exceeds decoded allocation "
+            f"size {decoded_allocation_size} for resource #{resource.index}."
+        )
+
+    return size_check, decoded_allocation_size
+
+
+def pack_mode0_resource(
+    decoded: bytes,
+    size_check: int | None = None,
+) -> bytes:
+    """
+    Build one MODE 0 package resource.
+
+    `decoded` is the complete XMEM input, including any zero padding needed
+    to preserve the original chunk allocation.
+
+    `size_check` is the logical resource size stored after the chunk stream.
+    When omitted, the decoded size is used.
     """
     if not decoded:
         raise ValueError("Cannot pack an empty resource.")
+
+    if size_check is None:
+        size_check = len(decoded)
+
+    if size_check < 0 or size_check > len(decoded):
+        raise ValueError(
+            f"SIZE_CHECK {size_check} is outside decoded size "
+            f"{len(decoded)}."
+        )
 
     output = bytearray(b"\x00\x00\x00\x00")
     chunk_size = 0x10000
@@ -602,17 +724,25 @@ def pack_mode0_resource(decoded: bytes) -> bytes:
         else:
             payload = chunk
 
-        output.extend(struct.pack("<II", len(chunk), len(payload)))
+        output.extend(
+            struct.pack(
+                "<II",
+                len(chunk),
+                len(payload),
+            )
+        )
         output.extend(payload)
 
     file_zsize = len(output)
     struct.pack_into("<I", output, 0, file_zsize)
 
-    # mx_atv.bms consumes this field after the chunk stream.
-    output.extend(struct.pack("<I", len(decoded)))
+    # SIZE_CHECK is the logical decoded resource size, not the total XMEM
+    # allocation size. For example:
+    #   Chunk SIZE = 65536
+    #   SIZE_CHECK = 21992
+    output.extend(struct.pack("<I", size_check))
 
     return bytes(output)
-
 
 def _patch_u32(buf: bytearray, offset: int, value: int, label: str):
     if value < 0 or value > 0xFFFFFFFF:
@@ -906,7 +1036,40 @@ def build_mode0_package(
                     f"{resource.asset.name if resource.asset else resource.index}: "
                     f"{resource.asset.codec!r}"
                 )
-            packed = pack_mode0_resource(decoded)
+
+            # Preserve the original MODE 0 XMEM allocation and logical
+            # SIZE_CHECK for replacements that fit inside it. This is
+            # especially important for DDS textures: a 21992-byte DDS can
+            # occupy a 65536-byte XMEM chunk in the original Package.
+            original_size_check, original_decoded_size = (
+                read_mode0_size_check_and_decoded_size(
+                    package,
+                    resource,
+                )
+            )
+
+            if is_script_resource(resource):
+                # Script packing creates its own 4-byte payload-size header.
+                # Keep the existing script behavior unchanged.
+                packed = pack_mode0_resource(decoded)
+            elif len(decoded) <= original_decoded_size:
+                padded = decoded + b"\x00" * (
+                    original_decoded_size - len(decoded)
+                )
+
+                packed = pack_mode0_resource(
+                    padded,
+                    size_check=original_size_check,
+                )
+            else:
+                # A larger replacement requires additional MODE 0 chunks.
+                # In that case the replacement itself defines the logical
+                # SIZE_CHECK.
+                packed = pack_mode0_resource(
+                    decoded,
+                    size_check=len(decoded),
+                )
+
 
         # The old block is deliberately left untouched. The external ToC will
         # point at the new block appended at EOF.
@@ -2727,7 +2890,7 @@ class MainFrame(wx.Frame):
     def show_about(self, event=None):
         wx.MessageBox(
             f"{APP_NAME}\n\n"
-            "A tool for working with .package game archives.\n\nVersion: 1.2.3\nAuthor: Daniil Korochansky\nLicense: GNU General Public License v3.0",
+            "A tool for working with .package game archives.\n\nVersion: 1.2.4\nAuthor: Daniil Korochansky\nLicense: GPLv3.0",
             "About",
             wx.OK | wx.ICON_INFORMATION,
         )
