@@ -8,7 +8,7 @@
 <img width="766" height="433" alt="image" src="https://github.com/user-attachments/assets/66d9b494-dc28-41f5-a7ef-c9903c603f9a" />
 
 
-A tool for viewing, exporting, and importing MX vs ATV Reflex game resources from .package game archives.
+A tool for viewing, exporting, and replace MX vs ATV Reflex game resources from .package game archives.
 
 The tool uses [XMem Helper](https://github.com/daniilkorochansky/xmem-helper), which acts as a bridge between the 32-bit `mszip.dll` library and the 64-bit operating system.
 
