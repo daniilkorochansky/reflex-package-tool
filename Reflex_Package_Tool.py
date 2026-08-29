@@ -33,16 +33,16 @@ import subprocess
 import sys
 import tempfile
 import zlib
+import threading
+import webbrowser
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-# Explicit wxPython imports.
 import wx
 import wx.adv
 import wx.dataview as dv
-
 
 APP_NAME = "Reflex Package Tool"
 
@@ -53,7 +53,7 @@ def resource_path(relative_path):
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 
-SOURCE_VERSION = "v1.2.3"
+SOURCE_VERSION = "v1.2.5"
 BXML_HEADER = struct.Struct("<9I")
 BXML_SIGNATURE = 0x4C4D5842
 ATTR_STRUCT = struct.Struct("<IIHH")
@@ -198,7 +198,7 @@ def parse_database(database_path: Path):
     if not hasattr(tool, "database_assets"):
         raise ValueError(
             "This bxml_database_tool.py is too old. "
-            "Use the bundled database tool v2 or newer."
+            "Use the bundled database tool newer."
         )
 
     entries = tool.database_assets(parsed)
@@ -465,6 +465,7 @@ def xmem_decompress(data: bytes, expected_size: int):
                 capture_output=True,
                 text=True,
                 timeout=30,
+                creationflags=subprocess.CREATE_NO_WINDOW,
                 cwd=str(tool_dir),
             )
         except OSError as exc:
@@ -558,6 +559,7 @@ def xmem_compress(data: bytes) -> bytes:
                 capture_output=True,
                 text=True,
                 timeout=60,
+                creationflags=subprocess.CREATE_NO_WINDOW,
                 cwd=str(tool_dir),
             )
         except OSError as exc:
@@ -918,6 +920,7 @@ def _patch_database_for_pack(
         )
 
     patched_assets = set()
+    updated_resources = {} #For updating resource.json file
 
     for entry in heap_entries:
         match = relocation_by_old.get(entry["old_absolute"])
@@ -933,7 +936,14 @@ def _patch_database_for_pack(
                 f"Resource #{resource_index} new offset "
                 f"precedes its Package offset."
             )
-
+        
+        updated_resources[resource_index] = {
+            "package_offset": new_absolute,
+            "database_package_offset": package_offset,
+            "database_heap_offset": new_heap_offset,
+            "database_heap_size": new_stored_size,
+        }
+        
         patch_pool_u32(
             entry["offset_attr"],
             new_heap_offset,
@@ -973,7 +983,7 @@ def _patch_database_for_pack(
         len(compressed),
     )
 
-    return header + compressed
+    return header + compressed, updated_resources
 
 
 
@@ -1084,7 +1094,7 @@ def build_mode0_package(
     if not relocations:
         raise ValueError("No replacements are registered.")
 
-    new_database = _patch_database_for_pack(
+    new_database, updated_resources = _patch_database_for_pack(
         database,
         relocations,
         resources,
@@ -1093,7 +1103,7 @@ def build_mode0_package(
     output_package.write_bytes(result)
     output_database.write_bytes(new_database)
 
-    return output_package, output_database, relocations
+    return output_package, output_database, relocations, updated_resources
 
 
 
@@ -1934,8 +1944,7 @@ def _database_info_records(parsed):
             "stored_size": size,
         }
         index += 1
-    if pos != info_end and any(raw[pos:info_end]):
-        raise ValueError("Database INFO region has unexpected non-zero data.")
+
     return records
 
 
@@ -2137,6 +2146,15 @@ def _patch_database_for_defragment(database: Path, relocations, resources):
     current_new_base = 0
     resource_index = 0
 
+    relocation_by_old = {
+        resource.info.offset: (
+            resource.index,
+            relocations[resource.index],
+        )
+        for resource in resources
+        if resource.index in relocations
+    }
+
     while pos + 12 <= info_end:
         record_pos = pos
         relative_offset, size, _zero = struct.unpack_from(
@@ -2159,23 +2177,22 @@ def _patch_database_for_defragment(database: Path, relocations, resources):
                 f"INFO base offset 0x{current_old_base:X}",
             )
             continue
-
+        
         if pos + 8 > info_end:
             raise ValueError("Database INFO region is truncated.")
 
         pos += 8
 
-        if resource_index >= len(resources):
-            raise ValueError("Database INFO/resource count mismatch.")
+        absolute_old = current_old_base + relative_offset
 
-        resource = resources[resource_index]
-        relocation = relocations.get(resource.index)
-        if relocation is None:
-            raise ValueError(
-                f"Missing relocation for INFO resource #{resource.index}"
-            )
+        match = relocation_by_old.get(absolute_old)
 
-        new_absolute, new_stored_size = relocation
+        if match is None:
+            # This INFO record does not correspond to a Database resource
+            # represented in the current Asset/Heap table. Leave it unchanged.
+            continue
+
+        resource_index, (new_absolute, new_stored_size) = match
         new_relative = new_absolute - current_new_base
 
         if new_relative < 0:
@@ -2194,17 +2211,6 @@ def _patch_database_for_defragment(database: Path, relocations, resources):
             record_pos + 4,
             new_stored_size,
             f"INFO size for resource #{resource.index}",
-        )
-
-        resource_index += 1
-
-    if pos != info_end and any(raw[pos:info_end]):
-        raise ValueError("Database INFO region has unexpected non-zero trailing data.")
-
-    if resource_index != len(resources):
-        raise ValueError(
-            "Database INFO/resource count mismatch: "
-            f"INFO={resource_index}, resources={len(resources)}"
         )
 
     compressed = zlib.compress(bytes(raw))
@@ -2320,6 +2326,55 @@ class DefragmentDialog(wx.Dialog):
     def set_progress(self, value):
         self.progress.SetValue(max(0, min(100, int(value))))
 
+class ExtractDialog(wx.Dialog):
+    def __init__(self, parent):
+        super().__init__(
+            parent,
+            title="Extract",
+            size=(430, 145),
+            style=(wx.DEFAULT_DIALOG_STYLE & ~wx.CLOSE_BOX) | wx.RESIZE_BORDER,
+        )
+
+        panel = wx.Panel(self)
+        root = wx.BoxSizer(wx.VERTICAL)
+
+        self.status = wx.StaticText(
+            panel,
+            label="Extracting resource...",
+        )
+
+        self.progress = wx.Gauge(
+            panel,
+            range=100,
+            style=wx.GA_HORIZONTAL,
+        )
+
+        root.Add(
+            self.status,
+            0,
+            wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP,
+            14,
+        )
+
+        root.Add(
+            self.progress,
+            0,
+            wx.EXPAND | wx.ALL,
+            14,
+        )
+
+        panel.SetSizer(root)
+        self.CentreOnParent()
+
+    def set_status(self, text):
+        self.status.SetLabel(text)
+
+    def start_progress(self):
+        self.progress.Pulse()
+
+    def stop_progress(self):
+        self.progress.SetValue(0)
+
 # ---------------------------------------------------------------------------
 # GUI
 # ---------------------------------------------------------------------------
@@ -2360,6 +2415,7 @@ class MainFrame(wx.Frame):
                 wx.ART_TOOLBAR,
             ),
         )
+        toolbar.SetToolShortHelp(self.tool_open.GetId(), "Open a .package archive")
         toolbar.AddSeparator()
         self.tool_extract = toolbar.AddTool(
             wx.ID_ANY,
@@ -2369,7 +2425,7 @@ class MainFrame(wx.Frame):
                 wx.ART_TOOLBAR,
             ),
         )
-
+        toolbar.SetToolShortHelp(self.tool_extract.GetId(), "Export the selected resource from the list")
         self.tool_pack = toolbar.AddTool(
             wx.ID_ANY,
             "Replace",
@@ -2378,7 +2434,7 @@ class MainFrame(wx.Frame):
                 wx.ART_TOOLBAR,
             ),
         )
-
+        toolbar.SetToolShortHelp(self.tool_pack.GetId(), "Replace the selected resource in the list")
         toolbar.Realize()
         root.Add(
             toolbar,
@@ -2402,6 +2458,8 @@ class MainFrame(wx.Frame):
         menu_bar.Append(tools_menu, "Tools")
 
         help_menu = wx.Menu()
+        help_github = help_menu.Append(wx.ID_ANY, "GitHub Repository")
+        help_menu.AppendSeparator()
         help_about = help_menu.Append(wx.ID_ABOUT, "About")
         menu_bar.Append(help_menu, "Help")
 
@@ -2413,6 +2471,7 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self.defragment, file_defragment)
         self.Bind(wx.EVT_MENU, self.on_exit, file_exit)
         self.Bind(wx.EVT_MENU, self.show_about, help_about)
+        self.Bind(wx.EVT_MENU, self.show_github, help_github)
 
 
         self.list = dv.DataViewListCtrl(
@@ -2467,8 +2526,9 @@ class MainFrame(wx.Frame):
         self.list.SetDropTarget(drop_target)
 
         self.statusbar = self.CreateStatusBar(2)
+        self.SetStatusBarPane(-1)
         self.SetStatusText("No package", 0)
-        self.SetStatusText("0 resources", 1)
+        self.SetStatusText("0 resources | 0 database matches", 1)
         self.statusbar.SetStatusWidths([-1, 220])
         self.statusbar.WindowStyle ^= wx.STB_SHOW_TIPS
 
@@ -2499,6 +2559,9 @@ class MainFrame(wx.Frame):
             dv.EVT_DATAVIEW_ITEM_ACTIVATED,
             self.extract_selected,
         )
+
+    def show_github(self, event):
+        webbrowser.open("https://github.com/daniilkorochansky/reflex-package-tool")
 
     def open_package(self, event=None, package_path=None):
         wildcard = (
@@ -2656,31 +2719,74 @@ class MainFrame(wx.Frame):
 
             destination = Path(dialog.GetPath())
 
-        try:
-            folder, resource_path, metadata = extract_resource(
-                self.package,
-                self.database,
-                resource,
-                destination,
-                self.mode,
+        dialog = ExtractDialog(self)
+        self.Enable(False)
+
+        timer = wx.Timer(dialog)
+
+        def pulse(event):
+            dialog.start_progress()
+
+        dialog.Bind(wx.EVT_TIMER, pulse, timer)
+        timer.Start(100)
+
+        def success(result):
+            timer.Stop()
+
+            folder, resource_path, metadata = result
+
+            dialog.EndModal(wx.ID_OK)
+            dialog.Destroy()
+
+            self.Enable(True)
+            self.Raise()
+
+            wx.MessageBox(
+                f"Extracted successfully:\n\n"
+                f"{folder}\n\n"
+                f"{resource_path.name}\n"
+                f"resource.json",
+                "Extract",
+                wx.OK | wx.ICON_INFORMATION,
             )
 
-        except Exception as exc:
+        def failure(message):
+            timer.Stop()
+
+            dialog.EndModal(wx.ID_CANCEL)
+            dialog.Destroy()
+
+            self.Enable(True)
+            self.Raise()
+
             wx.MessageBox(
-                str(exc),
+                message,
                 "Extract failed",
                 wx.OK | wx.ICON_ERROR,
             )
-            return
 
-        wx.MessageBox(
-            f"Extracted successfully:\n\n"
-            f"{folder}\n\n"
-            f"{resource_path.name}\n"
-            f"resource.json",
-            "Extract",
-            wx.OK | wx.ICON_INFORMATION,
-        )
+        def worker():
+            try:
+                result = extract_resource(
+                    self.package,
+                    self.database,
+                    resource,
+                    destination,
+                    self.mode,
+                )
+
+                wx.CallAfter(success, result)
+
+            except Exception as exc:
+                wx.CallAfter(failure, str(exc))
+
+        threading.Thread(
+            target=worker,
+            name="ReflexPackageExtraction",
+            daemon=True,
+        ).start()
+
+        dialog.ShowModal()
 
     def on_context_menu(self, event):
         item = event.GetItem()
@@ -2727,6 +2833,64 @@ class MainFrame(wx.Frame):
 
         self.PopupMenu(menu)
         menu.Destroy()
+
+    def update_resource_json(
+        self,
+        replacement: Replacement,
+        resource: Resource,
+        packed_package: Path,
+        updated_resources: dict,
+    ):
+        if replacement.resource_json is None:
+            return
+
+        metadata_path = replacement.resource_json
+
+        if not metadata_path.exists():
+            return
+
+        metadata = json.loads(
+            metadata_path.read_text(encoding="utf-8")
+        )
+
+        updated = updated_resources.get(resource.index)
+
+        if updated is None:
+            raise ValueError(
+                f"No updated metadata for resource #{resource.index}."
+            )
+
+        metadata["package"] = packed_package.name
+        metadata["database"] = packed_package.with_suffix(".database").name
+
+        metadata["package_offset"] = updated["package_offset"]
+        metadata["database_package_offset"] = updated["database_package_offset"]
+        metadata["database_heap_offset"] = updated["database_heap_offset"]
+        metadata["database_heap_size"] = updated["database_heap_size"]
+
+        if resource.asset is not None and resource.asset.compressed:
+            metadata["package_file_zsize"] = (
+                updated["database_heap_size"] - 4
+            )
+        else:
+            metadata["package_file_zsize"] = (
+                updated["database_heap_size"]
+            )
+
+        metadata["decoded_size"] = replacement.source_file.stat().st_size
+
+        metadata["sha256"] = hashlib.sha256(
+            replacement.source_file.read_bytes()
+        ).hexdigest()
+
+        metadata_path.write_text(
+            json.dumps(
+                metadata,
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
     def pack(self, event=None):
         resource = self.selected_resource()
@@ -2792,7 +2956,7 @@ class MainFrame(wx.Frame):
         output_database = output_package.with_suffix(".database")
 
         try:
-            packed_package, packed_database, relocations = build_mode0_package(
+            packed_package, packed_database, relocations, updated_resources = build_mode0_package(
                 self.package,
                 self.database,
                 self.resources,
@@ -2803,6 +2967,22 @@ class MainFrame(wx.Frame):
         except Exception as exc:
             wx.MessageBox(str(exc), "Replace failed", wx.OK | wx.ICON_ERROR)
             return
+
+        try:
+            self.update_resource_json(
+                replacement,
+                resource,
+                packed_package,
+                updated_resources,
+            )
+        except Exception as exc:
+            wx.MessageBox(
+                "Package was created successfully, "
+                "but resource.json could not be updated.\n\n"
+                f"{exc}",
+                "resource.json update failed",
+                wx.OK | wx.ICON_WARNING,
+            )
 
         wx.MessageBox(
             "Package created successfully.\n\n"
@@ -2817,10 +2997,21 @@ class MainFrame(wx.Frame):
 
     def defragment(self, event=None):
         if self.package is None or self.database is None:
-            wx.MessageBox("Open a Package first.", "Optimization", wx.OK | wx.ICON_INFORMATION)
+            wx.MessageBox("Open a .package first.", "Package Optimization", wx.OK | wx.ICON_INFORMATION)
             return
+
+        result = wx.MessageBox(
+            "This will defragment the package and update its database.\n"
+            "The original files will not be modified.\n\n"
+            "Do you want to continue?",
+            "Package Optimization",
+            wx.YES_NO | wx.ICON_QUESTION,
+        )
+        if result != wx.YES:
+            return
+        
         if not self.resources:
-            wx.MessageBox("The current .database does not contain any resources.", "Optimization", wx.OK | wx.ICON_INFORMATION)
+            wx.MessageBox("The current .database does not contain any resources.", "Package Optimization", wx.OK | wx.ICON_INFORMATION)
             return
 
         dialog = DefragmentDialog(self)
@@ -2843,7 +3034,7 @@ class MainFrame(wx.Frame):
             dialog.Destroy()
             self.Enable(True)
             self.Raise()
-            wx.MessageBox("Optimization completed successfully.\n\nVerification passed successfully.", "Optimization", wx.OK | wx.ICON_INFORMATION)
+            wx.MessageBox("Optimization completed successfully.\n\nVerification passed successfully.", "Package Optimization", wx.OK | wx.ICON_INFORMATION)
 
             with wx.FileDialog(self, "Save Optimized Package", defaultDir=str(self.package.parent), defaultFile=f"{self.package.stem}{self.package.suffix}", wildcard="MX vs ATV Reflex Package (*.package)|*.package|All files (*.*)|*.*", style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as save_dialog:
                 if save_dialog.ShowModal() != wx.ID_OK:
@@ -2879,7 +3070,6 @@ class MainFrame(wx.Frame):
             except Exception as exc:
                 wx.CallAfter(failure, str(exc))
 
-        import threading
         threading.Thread(target=worker, name="ReflexPackageOptimization", daemon=True).start()
         dialog.ShowModal()
 
@@ -2890,7 +3080,7 @@ class MainFrame(wx.Frame):
     def show_about(self, event=None):
         wx.MessageBox(
             f"{APP_NAME}\n\n"
-            "A tool for working with .package game archives.\n\nVersion: 1.2.4\nAuthor: Daniil Korochansky\nLicense: GPLv3.0",
+            "A tool for working with game archives for MX vs ATV Reflex in the .package format.\n\nVersion: 1.2.5\nAuthor: Daniil Korochansky\nLicense: GPLv3.0",
             "About",
             wx.OK | wx.ICON_INFORMATION,
         )
