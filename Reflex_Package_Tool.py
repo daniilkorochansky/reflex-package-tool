@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # -------------------------------------------------------------------------------------------------------------------
-#   Reflex Package Tool — A tool for working with .package game archives.
+#   Reflex Package Tool — A tool for working with game archives for MX vs ATV Reflex in the .package format.
 #   Copyright (C) 2026  Daniil Korochansky
 #
 #   This file is part of Reflex Package Tool.
@@ -44,6 +44,8 @@ import wx
 import wx.adv
 import wx.dataview as dv
 
+from ui.texture_converter import TextureConverter
+
 APP_NAME = "Reflex Package Tool"
 
 def resource_path(relative_path):
@@ -53,7 +55,7 @@ def resource_path(relative_path):
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 
-SOURCE_VERSION = "v1.2.5"
+SOURCE_VERSION = "v1.3.0"
 BXML_HEADER = struct.Struct("<9I")
 BXML_SIGNATURE = 0x4C4D5842
 ATTR_STRUCT = struct.Struct("<IIHH")
@@ -2454,6 +2456,10 @@ class MainFrame(wx.Frame):
         menu_bar.Append(file_menu, "File")
 
         tools_menu = wx.Menu()
+        converters_menu = wx.Menu()
+        tools_converters = converters_menu.Append(wx.ID_ANY, "Texture Converter...\tCtrl+1")
+        tools_menu.AppendSubMenu(converters_menu, 'Additional')
+        tools_menu.AppendSeparator()
         file_defragment = tools_menu.Append(wx.ID_ANY, "Package Optimization")
         menu_bar.Append(tools_menu, "Tools")
 
@@ -2468,6 +2474,7 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self.open_package, file_open)
         self.Bind(wx.EVT_MENU, self.extract_selected, file_extract)
         self.Bind(wx.EVT_MENU, self.pack, file_pack)
+        self.Bind(wx.EVT_MENU, self.open_texture_converter, tools_converters)
         self.Bind(wx.EVT_MENU, self.defragment, file_defragment)
         self.Bind(wx.EVT_MENU, self.on_exit, file_exit)
         self.Bind(wx.EVT_MENU, self.show_about, help_about)
@@ -2559,6 +2566,10 @@ class MainFrame(wx.Frame):
             dv.EVT_DATAVIEW_ITEM_ACTIVATED,
             self.extract_selected,
         )
+
+    def open_texture_converter(self, event):
+        self.texture_conv = TextureConverter(self)
+        self.texture_conv.ShowModal()
 
     def show_github(self, event):
         webbrowser.open("https://github.com/daniilkorochansky/reflex-package-tool")
@@ -3080,7 +3091,7 @@ class MainFrame(wx.Frame):
     def show_about(self, event=None):
         wx.MessageBox(
             f"{APP_NAME}\n\n"
-            "A tool for working with game archives for MX vs ATV Reflex in the .package format.\n\nVersion: 1.2.5\nAuthor: Daniil Korochansky\nLicense: GPLv3.0",
+            "A tool for working with game archives for MX vs ATV Reflex in the .package format.\n\nVersion: 1.3.0\nAuthor: Daniil Korochansky\nLicense: GPLv3.0",
             "About",
             wx.OK | wx.ICON_INFORMATION,
         )

@@ -1,1 +1,2 @@
 wxpython==4.2.5
+pillow==12.3.0
