@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # -------------------------------------------------------------------------------------------------------------------
-#   Reflex Package Tool — A tool for working with .package game archives.
+#   Reflex Package Tool — A tool for working with game archives for MX vs ATV Reflex in the .package format.
 #   Copyright (C) 2026  Daniil Korochansky
 #
 #   This file is part of Reflex Package Tool.

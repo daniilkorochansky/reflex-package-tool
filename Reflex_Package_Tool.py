@@ -1029,6 +1029,8 @@ def build_mode0_package(
 
         if is_script_resource(resource):
             decoded = process_script_pack(decoded)
+        elif is_bink_resource(resource):
+            decoded = process_bink_pack(decoded)
 
         if not decoded:
             raise ValueError(
@@ -1107,8 +1109,99 @@ def build_mode0_package(
 
     return output_package, output_database, relocations, updated_resources
 
+#Bink Resource
+def is_bink_resource(resource: "Resource") -> bool:
+    """Return True for MX vs ATV Reflex Bink video resources."""
+    if not resource.asset:
+        return False
+
+    name = str(resource.asset.name or "").strip().lower()
+    resource_type = (
+        str(resource.asset.type or "")
+        .strip()
+        .lower()
+        .lstrip(".")
+    )
+
+    return (
+        name.endswith(".bink")
+        or resource_type == "bink"
+    )
 
 
+BINK_MAGIC = (b"BIKi", b"BIKh")
+
+
+def process_bink_extract(resource_data: bytes) -> bytes:
+    """
+    Convert a Reflex Bink resource into a clean standard Bink file.
+
+    Layout:
+        [4-byte Reflex header][Bink][XMem/padding]
+    """
+    if len(resource_data) < 12:
+        raise ValueError(
+            "Bink resource is too small to contain a Reflex header and Bink header."
+        )
+
+    # Reflex-specific 4-byte header.
+    bink = resource_data[4:]
+
+    if bink[:4] not in BINK_MAGIC:
+        raise ValueError(
+            "Invalid Reflex Bink resource: "
+            f"expected BIKi/BIKh at offset 0x04, got {bink[:4]!r}."
+        )
+
+    # Bink file_size excludes the first 8 bytes.
+    bink_file_size = struct.unpack_from("<I", bink, 4)[0]
+    total_bink_size = bink_file_size + 8
+
+    if total_bink_size > len(bink):
+        raise ValueError(
+            f"Bink declares {total_bink_size:,} bytes, "
+            f"but only {len(bink):,} bytes are available."
+        )
+
+    # Everything after the Bink is trailing XMem/padding.
+    return bink[:total_bink_size]
+
+
+def process_bink_pack(bink_data: bytes) -> bytes:
+    """
+    Convert a clean standard Bink file into a Reflex Bink resource.
+
+    Layout:
+        [4-byte Reflex size][Bink]
+    No padding/alignment is added here.
+    """
+    if len(bink_data) < 8:
+        raise ValueError(
+            "Bink file is too small to contain a Bink header."
+        )
+
+    if bink_data[:4] not in BINK_MAGIC:
+        raise ValueError(
+            "Invalid Bink file: "
+            f"expected BIKi/BIKh, got {bink_data[:4]!r}."
+        )
+
+    bink_file_size = struct.unpack_from("<I", bink_data, 4)[0]
+    total_bink_size = bink_file_size + 8
+
+    if total_bink_size != len(bink_data):
+        raise ValueError(
+            "Replacement Bink must be a clean Bink without trailing data.\n\n"
+            f"Declared Bink size: {total_bink_size:,}\n"
+            f"Actual file size:   {len(bink_data):,}"
+        )
+
+    if len(bink_data) > 0xFFFFFFFF:
+        raise ValueError("Bink resource is too large for a 32-bit size field.")
+
+    # Reflex header = exact Bink payload size.
+    return struct.pack("<I", len(bink_data)) + bink_data
+#Bink Resource End
 
 
 def is_script_resource(resource: "Resource") -> bool:
@@ -1460,6 +1553,9 @@ def resource_file_name(resource: Resource):
 
         elif typ.lower().lstrip(".") == "adv":
             typ = "bxml"
+            
+        elif typ.lower().lstrip(".") == "bink":
+            typ = "bik"
 
         return f"{base}.{typ}"
 
@@ -1509,6 +1605,10 @@ def extract_resource(
     # Hide the internal .script payload-size header from extracted files.
     if filename.lower().endswith(".lua"):
         decoded = process_script_extract(decoded)
+
+    elif is_bink_resource(resource):
+        decoded = process_bink_extract(decoded)
+        filename = Path(filename).with_suffix(".bik").name
 
     resource_path = folder / filename
     resource_path.write_bytes(decoded)
@@ -3091,7 +3191,7 @@ class MainFrame(wx.Frame):
     def show_about(self, event=None):
         wx.MessageBox(
             f"{APP_NAME}\n\n"
-            "A tool for working with game archives for MX vs ATV Reflex in the .package format.\n\nVersion: 1.3.0\nAuthor: Daniil Korochansky\nLicense: GPLv3.0",
+            "A tool for working with game archives for MX vs ATV Reflex in the .package format.\n\nVersion: 1.3.1\nAuthor: Daniil Korochansky\nLicense: GPLv3.0",
             "About",
             wx.OK | wx.ICON_INFORMATION,
         )
