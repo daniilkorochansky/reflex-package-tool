@@ -26,6 +26,7 @@ The tool uses [XMem Helper](https://github.com/daniilkorochansky/xmem-helper), w
 - [Installation](#installation)
 - [Usage](#usage)
 - [Package Optimization](#package-optimization)
+- [Supported resources](#supported-resources)
 - [Other Tools](#other-tools)
   - [Reflex BXML Editor](#other-tools)
   - [Reflex Font Package Viewer](#other-tools)
@@ -43,6 +44,8 @@ The tool uses [XMem Helper](https://github.com/daniilkorochansky/xmem-helper), w
 
 ## Package Optimization
 Optimizing the .package file by repackaging the used data blocks into a new .package archive, thereby eliminating unused data blocks. As a result, the .package archive contains only the data that is actually used, which also reduces the size of the archive itself.
+
+## Supported resources
 
 ## Other Tools
 + [Reflex BXML Editor](https://github.com/daniilkorochansky/reflex-bxml-editor): It allows you to edit `.bxml`, `.database`, `.level` and `savegame.bxml` files and rebuild them.
