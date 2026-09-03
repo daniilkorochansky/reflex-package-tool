@@ -18,6 +18,7 @@ The tool uses [XMem Helper](https://github.com/daniilkorochansky/xmem-helper), w
 + Extract resources from packages.
 + Replace resources inside packages.
 + Texture Converter.
++ Localization Editor.
 + Package optimization.
 + Automatic `.database` updating.
 + Append-only resource replacement.
