@@ -57,6 +57,7 @@ Optimizing the .package file by repackaging the used data blocks into a new .pac
 #### Not supported
 + **.model** - This may be a configuration that describes which resources the 3D model uses and its parameters?
 + **.surface** - Equivalent to `.mesh`
++ **.sound** - It may describe which audio file, where, and when to play it?
 + **.anim** - Animation file
 + **.shader** - ?
 + **.tree** - ?
