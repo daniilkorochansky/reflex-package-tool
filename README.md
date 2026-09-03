@@ -28,6 +28,7 @@ The tool uses [XMem Helper](https://github.com/daniilkorochansky/xmem-helper), w
 - [Package Optimization](#package-optimization)
 - [Resources](#resources)
   - [Editable Resources](#editable-resources)
+    - [Not supported](#not-supported)
 - [Other Tools](#other-tools)
   - [Reflex BXML Editor](#other-tools)
   - [Reflex Font Package Viewer](#other-tools)
@@ -48,7 +49,7 @@ Optimizing the .package file by repackaging the used data blocks into a new .pac
 
 ## Resources
 ### Editable Resources
-+ **.texture** - A built-in texture converter for converting between `.texture` and `.dds` formats.
++ **.texture** - Textures for jersey suits, graphic kits, track objects, and so on. A built-in texture converter for converting between `.texture` and `.dds` formats.
 + **.bxml** - Including the `.material`, `.uicmpnt`, and `.adv` resources. These can be edited in the [Reflex Package Tool](https://github.com/daniilkorochansky/reflex-bxml-editor).
 + **.bink** - Bink video file in the .bik format. These are the videos that are shown on large stadium screens and elsewhere. Using Rad Video Tools, you can convert .mp4 files to the .bik format.
 
