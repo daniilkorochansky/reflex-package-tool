@@ -30,6 +30,9 @@ class LocalizEntry:
     key: str
     value: str
     length: int
+    # For entries decoded from the game, this is the original reserved
+    # UTF-16 size. The encoder preserves it by space-padding shorter edits.
+    original_length: int | None = None
 
     @classmethod
     def from_pair(cls, key: str, value: str) -> "LocalizEntry":
@@ -40,6 +43,11 @@ class LocalizEntry:
     def utf16_length(self) -> int:
         return _utf16_units(self.value)
 
+    @property
+    def encoded_length(self) -> int:
+        """UTF-16 code units reserved on disk for this entry."""
+        return self.original_length if self.original_length is not None else self.utf16_length
+
 
 @dataclass
 class LocalizFile:
@@ -49,6 +57,14 @@ class LocalizFile:
     # UTF-16 strings in the string pool. They are preserved here as groups
     # inserted before entry N. The list therefore has key_count + 1 groups.
     orphan_strings_before: list[list[str]] | None = None
+    # Physical size of the source resource, including XMEM zero padding.
+    # When saving a decoded resource, this size is preserved automatically
+    # whenever the rebuilt payload still fits.
+    original_physical_size: int | None = None
+    # Bytes physically stored after the declared string pool. These bytes are
+    # preserved verbatim because this resource family may contain non-zero
+    # trailing data, not merely zero padding.
+    trailing_data: bytes = b""
 
     @property
     def key_count(self) -> int:
@@ -56,7 +72,7 @@ class LocalizFile:
 
     @property
     def total_chars(self) -> int:
-        total = sum(e.utf16_length + 1 for e in self.entries)
+        total = sum(e.encoded_length + 1 for e in self.entries)
         if self.orphan_strings_before:
             total += sum(
                 _utf16_units(s) + 1
@@ -90,7 +106,17 @@ class LocalizFile:
         _validate_string_pair(key, value)
         for i, entry in enumerate(self.entries):
             if entry.key == key:
-                self.entries[i] = LocalizEntry.from_pair(key, value)
+                current = entry.original_length
+                new_len = _utf16_units(value)
+                # Shorter values keep their original slot size (space padded).
+                # Longer values are now allowed: the slot grows and the string
+                # pool is rebuilt accordingly. This is the experimental behavior
+                # needed to test longer translations in Reflex.
+                reserved = new_len if current is None or new_len > current else current
+                self.entries[i] = LocalizEntry(
+                    key=key, value=value, length=reserved,
+                    original_length=reserved,
+                )
                 return True
         if not create:
             raise KeyError(key)
@@ -348,7 +374,7 @@ def parse_localiz(data: bytes, *, validate_padding: bool = False) -> LocalizFile
             raise LocalizError(
                 f"value for key {key!r} contains embedded NUL"
             )
-        entries.append(LocalizEntry(key=key, value=value, length=length))
+        entries.append(LocalizEntry(key=key, value=value, length=length, original_length=length))
 
     if not any(orphan_before):
         orphan_before = None
@@ -362,6 +388,8 @@ def parse_localiz(data: bytes, *, validate_padding: bool = False) -> LocalizFile
         version=version,
         entries=entries,
         orphan_strings_before=orphan_before,
+        original_physical_size=len(data),
+        trailing_data=data[string_data_end:],
     )
 
 
@@ -426,7 +454,7 @@ def encode_localiz(
     version: int | None = None,
     pad_to: int | None = None,
 ) -> bytes:
-    """Encode a LocalizFile. By default output is unpadded/canonical."""
+    """Encode a LocalizFile. Decoded entries retain their original reserved UTF-16 length; shorter edits are space-padded."""
     if isinstance(localiz, LocalizFile):
         model = localiz
         version = model.version if version is None else version
@@ -462,8 +490,16 @@ def encode_localiz(
         key_raw = entry.key.encode("utf-8")
         value_raw = entry.value.encode("utf-16le", errors="surrogatepass")
         units = len(value_raw) // 2
+        reserved = entry.encoded_length
+        if units > reserved:
+            raise ValueError(
+                f"value for key {entry.key!r} is {units} UTF-16 units, "
+                f"but only {reserved} units are reserved"
+            )
+        if units < reserved:
+            value_raw += (" " * (reserved - units)).encode("utf-16le")
         key_blob_parts.append(key_raw + b"\x00")
-        lengths_parts.append(U32.pack(units))
+        lengths_parts.append(U32.pack(reserved))
         strings_parts.append(value_raw + b"\x00\x00")
 
     if orphan_groups:
@@ -484,11 +520,23 @@ def encode_localiz(
     out += U32.pack(total_chars)
     out += string_blob
 
+    # Preserve the exact bytes that followed the declared payload in a decoded
+    # resource. They are not assumed to be zero padding. This is critical for
+    # MXRaven_Default_Strings, whose trailing region contains non-zero bytes.
+    if isinstance(localiz, LocalizFile):
+        out += model.trailing_data
+
+    # Explicit pad_to is still supported for callers creating/rebuilding files
+    # from scratch. For decoded resources, exact trailing bytes take precedence
+    # over synthetic zero padding. If the payload grows, the resource grows;
+    # never truncate or overwrite the preserved trailing region.
     if pad_to is not None:
         if not isinstance(pad_to, int) or pad_to <= 0:
             raise ValueError("pad_to must be a positive integer")
         if len(out) > pad_to:
-            raise ValueError(f"encoded resource is {len(out)} bytes, larger than pad_to={pad_to}")
+            raise ValueError(
+                f"encoded resource is {len(out)} bytes, larger than pad_to={pad_to}"
+            )
         out += b"\x00" * (pad_to - len(out))
 
     return bytes(out)
@@ -510,7 +558,7 @@ def encode_file(
     return len(data)
 
 
-def load_json(path: Path) -> tuple[int | None, list[tuple[str, str]], list[list[str]] | None]:
+def load_json(path: Path) -> tuple[int | None, list[tuple[str, str]], list[list[str]] | None, list[int] | None, int | None, bytes]:
     obj = json.loads(path.read_text(encoding="utf-8"))
     if isinstance(obj, dict) and "entries" in obj:
         version = obj.get("version")
@@ -523,6 +571,22 @@ def load_json(path: Path) -> tuple[int | None, list[tuple[str, str]], list[list[
                 raise ValueError(f"invalid entry {i}: expected {{'key': str, 'value': str}}")
             entries.append((item["key"], item["value"]))
         orphan_strings_before = obj.get("orphan_strings_before")
+        original_lengths = obj.get("original_lengths")
+        if original_lengths is not None:
+            if (not isinstance(original_lengths, list) or len(original_lengths) != len(entries)
+                    or any(not isinstance(n, int) or n < 0 for n in original_lengths)):
+                raise ValueError("'original_lengths' must be a list of key_count non-negative integers")
+        original_physical_size = obj.get("original_physical_size")
+        trailing_data_hex = obj.get("trailing_data_hex", "")
+        if not isinstance(trailing_data_hex, str) or len(trailing_data_hex) % 2:
+            raise ValueError("'trailing_data_hex' must be an even-length hex string")
+        try:
+            trailing_data = bytes.fromhex(trailing_data_hex)
+        except ValueError as exc:
+            raise ValueError("'trailing_data_hex' is not valid hexadecimal") from exc
+        if original_physical_size is not None:
+            if not isinstance(original_physical_size, int) or original_physical_size <= 0:
+                raise ValueError("'original_physical_size' must be a positive integer")
         if orphan_strings_before is not None:
             if (
                 not isinstance(orphan_strings_before, list)
@@ -533,9 +597,9 @@ def load_json(path: Path) -> tuple[int | None, list[tuple[str, str]], list[list[
                 raise ValueError(
                     "'orphan_strings_before' must be a list of key_count + 1 string lists"
                 )
-        return version, entries, orphan_strings_before
+        return version, entries, orphan_strings_before, original_lengths, original_physical_size, trailing_data
     if isinstance(obj, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in obj.items()):
-        return None, list(obj.items()), None
+        return None, list(obj.items()), None, None, None, b""
     raise ValueError("JSON must be {'version': ..., 'entries': [...]} or a simple {key: value} object")
 
 
@@ -544,6 +608,12 @@ def dump_json(model: LocalizFile, path: Path, *, pretty: bool = True) -> None:
         "version": model.version,
         "entries": [{"key": e.key, "value": e.value} for e in model.entries],
     }
+    if model.original_physical_size is not None:
+        obj["original_physical_size"] = model.original_physical_size
+    if model.trailing_data:
+        obj["trailing_data_hex"] = model.trailing_data.hex()
+    if any(e.original_length is not None for e in model.entries):
+        obj["original_lengths"] = [e.original_length for e in model.entries]
     if model.orphan_strings_before:
         obj["orphan_strings_before"] = model.orphan_strings_before
     path.write_text(
@@ -570,10 +640,17 @@ def cmd_decode(args: argparse.Namespace) -> int:
 
 def cmd_encode(args: argparse.Namespace) -> int:
     src, dst = Path(args.input), Path(args.output)
-    json_version, entries, orphan_strings_before = load_json(src)
+    json_version, entries, orphan_strings_before, original_lengths, original_physical_size, trailing_data = load_json(src)
     version = args.version if args.version is not None else (json_version if json_version is not None else FORMAT_VERSION)
     model = make_localiz(entries, version=version)
     model.orphan_strings_before = orphan_strings_before
+    model.original_physical_size = original_physical_size
+    model.trailing_data = trailing_data
+    if original_lengths is not None:
+        model.entries = [
+            LocalizEntry(key=e.key, value=e.value, length=original_lengths[i], original_length=original_lengths[i])
+            for i, e in enumerate(model.entries)
+        ]
     data = encode_localiz(model, pad_to=args.pad_to)
     dst.write_bytes(data)
     print(f"encoded {dst}: version={model.version}, keys={model.key_count}, size={len(data)} (0x{len(data):X})")
