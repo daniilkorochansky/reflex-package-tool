@@ -26,6 +26,9 @@ The tool uses [XMem Helper](https://github.com/daniilkorochansky/xmem-helper), w
 - [Installation](#installation)
 - [Usage](#usage)
 - [Package Optimization](#package-optimization)
+- [Resources](#resources)
+  - [Editable Resources](#editable-resources)
+    - [Not supported](#not-supported)
 - [Other Tools](#other-tools)
   - [Reflex BXML Editor](#other-tools)
   - [Reflex Font Package Viewer](#other-tools)
@@ -43,6 +46,28 @@ The tool uses [XMem Helper](https://github.com/daniilkorochansky/xmem-helper), w
 
 ## Package Optimization
 Optimizing the .package file by repackaging the used data blocks into a new .package archive, thereby eliminating unused data blocks. As a result, the .package archive contains only the data that is actually used, which also reduces the size of the archive itself.
+
+## Resources
+### Editable Resources
++ **.texture** - Textures for jersey suits, graphic kits, track objects, and so on. A built-in texture converter for converting between `.texture` and `.dds` formats.
++ **.bxml** - Including the `.material`, `.uicmpnt`, and `.adv` resources. These can be edited in the [Reflex Package Tool](https://github.com/daniilkorochansky/reflex-bxml-editor).
++ **.bink** - Bink video file in the .bik format. These are the videos that are shown on large stadium screens and elsewhere. Using Rad Video Tools, you can convert .mp4 files to the .bik format.
++ **.script** - Lua code for the game’s UI logic.
+
+#### Not supported
++ **.model** - This may be a configuration that describes which resources the 3D model uses and its parameters?
++ **.surface** - Equivalent to `.mesh`
++ **.sound** - It may describe which audio file, where, and when to play it?
++ **.anim** - Animation file
++ **.localiz** - Strings and localization keys
++ **.shader** - Shaders responsible for visual effects.
++ **.tree** - ?
++ **.forest** - ?
++ **.water** - ?
++ **.icongeom** - ?
++ **.tdf** - ?
++ **.texatlas** - ?
++ **.cell** - ?
 
 ## Other Tools
 + [Reflex BXML Editor](https://github.com/daniilkorochansky/reflex-bxml-editor): It allows you to edit `.bxml`, `.database`, `.level` and `savegame.bxml` files and rebuild them.
