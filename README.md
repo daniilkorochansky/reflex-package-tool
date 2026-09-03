@@ -58,6 +58,7 @@ Optimizing the .package file by repackaging the used data blocks into a new .pac
 + **.model** - This may be a configuration that describes which resources the 3D model uses and its parameters?
 + **.surface** - Equivalent to `.mesh`
 + **.anim** - Animation file
++ **.shader** - ?
 + **.tree** - ?
 + **.forest** - ?
 + **.water** - ?
