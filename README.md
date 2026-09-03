@@ -50,7 +50,7 @@ Optimizing the .package file by repackaging the used data blocks into a new .pac
 ### Editable Resources
 + **.texture** - A built-in texture converter for converting between `.texture` and `.dds` formats.
 + **.bxml** - Including the `.material`, `.uicmpnt`, and `.adv` resources. These can be edited in the [Reflex Package Tool](https://github.com/daniilkorochansky/reflex-bxml-editor).
-+ **.bink** - Bink video file in the .bik format. Using Rad Video Tools, you can convert .mp4 files to the .bik format.
++ **.bink** - Bink video file in the .bik format. These are the videos that are shown on large stadium screens and elsewhere. Using Rad Video Tools, you can convert .mp4 files to the .bik format.
 
 #### Not supported
 + **.model** - This may be a configuration that describes which resources the 3D model uses and its parameters?
