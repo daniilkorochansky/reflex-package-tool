@@ -45,6 +45,7 @@ import wx.adv
 import wx.dataview as dv
 
 from ui.texture_converter import TextureConverter
+from ui.localiz_editor import LocalizationEditor
 
 APP_NAME = "Reflex Package Tool"
 
@@ -55,11 +56,13 @@ def resource_path(relative_path):
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 
-SOURCE_VERSION = "v1.3.0"
+SOURCE_VERSION = "v1.3.2"
+
 BXML_HEADER = struct.Struct("<9I")
 BXML_SIGNATURE = 0x4C4D5842
 ATTR_STRUCT = struct.Struct("<IIHH")
 NODE_STRUCT = struct.Struct("<IiIIIIII")
+BINK_MAGIC = (b"BIKi", b"BIKh")
 
 
 class PackageDropTarget(wx.FileDropTarget):
@@ -137,7 +140,7 @@ def load_bxml_database_tool(database_path: Path):
 
     module = importlib.util.module_from_spec(spec)
 
-    # dataclasses (used by bxml_database_tool.py) expects the module to be
+    # dataclasses expects the module to be
     # present in sys.modules while class decorators are being evaluated.
     # Without this, Python 3.13/3.14 can fail with:
     #   'NoneType' object has no attribute '__dict__'
@@ -1051,7 +1054,7 @@ def build_mode0_package(
                     f"{resource.asset.codec!r}"
                 )
 
-            # Preserve the original MODE 0 XMEM allocation and logical
+            # Preserve the original XMEM allocation and logical
             # SIZE_CHECK for replacements that fit inside it. This is
             # especially important for DDS textures: a 21992-byte DDS can
             # occupy a 65536-byte XMEM chunk in the original Package.
@@ -1111,7 +1114,6 @@ def build_mode0_package(
 
 #Bink Resource
 def is_bink_resource(resource: "Resource") -> bool:
-    """Return True for MX vs ATV Reflex Bink video resources."""
     if not resource.asset:
         return False
 
@@ -1127,9 +1129,6 @@ def is_bink_resource(resource: "Resource") -> bool:
         name.endswith(".bink")
         or resource_type == "bink"
     )
-
-
-BINK_MAGIC = (b"BIKi", b"BIKh")
 
 
 def process_bink_extract(resource_data: bytes) -> bytes:
@@ -1847,75 +1846,6 @@ def deflate_encode(data: bytes) -> bytes:
         + compressor.flush()
     )
 
-
-def pack_mode1_chunks(decoded: bytes) -> bytes:
-    """
-    Build MODE 1 chunk data.
-
-    The BMS decoder reads two big-endian 16-bit values and adds one:
-        SIZE  = BE16 + 1
-        ZSIZE = BE16 + 1
-
-    Therefore a chunk can encode up to 65536 bytes.
-
-    For each chunk:
-        uint16_be(SIZE - 1)
-        uint16_be(ZSIZE - 1)
-        compressed bytes
-
-    If compression does not make the data smaller, store it raw.
-    """
-    output = bytearray()
-    pos = 0
-
-    while pos < len(decoded):
-        chunk = decoded[pos:pos + 0x10000]
-        compressed = deflate_encode(chunk)
-
-        if len(compressed) >= len(chunk):
-            payload = chunk
-        else:
-            payload = compressed
-
-        size = len(chunk)
-        zsize = len(payload)
-
-        if size < 1 or size > 0x10000:
-            raise ValueError("MODE 1 chunk SIZE is out of range")
-
-        if zsize < 1 or zsize > 0x10000:
-            raise ValueError("MODE 1 chunk ZSIZE is out of range")
-
-        output.extend(
-            struct.pack(
-                ">HH",
-                size - 1,
-                zsize - 1,
-            )
-        )
-        output.extend(payload)
-
-        pos += size
-
-    return bytes(output)
-
-
-def pack_mode1_resource(decoded: bytes) -> bytes:
-    """
-    Build a complete MODE 1 resource block.
-
-    FILE_ZSIZE is the total number of bytes occupied by:
-        FILE_ZSIZE itself + chunk stream
-    """
-    chunks = pack_mode1_chunks(decoded)
-    file_zsize = 4 + len(chunks)
-
-    return (
-        struct.pack("<I", file_zsize)
-        + chunks
-    )
-
-
 def collect_replacement_data(
     package: Path,
     resource: Resource,
@@ -1936,51 +1866,6 @@ def collect_replacement_data(
         )
 
     return data
-
-
-def build_mode1_package(
-    package: Path,
-    resources: list[Resource],
-    replacements: dict[int, Replacement],
-    output: Path,
-):
-
-    mode, _, _, _ = detect_mode(package)
-
-    if mode != 1:
-        raise ValueError("This first pack implementation not supported.")
-
-    with package.open("rb") as source, output.open("wb") as target:
-        for resource in resources:
-            replacement = replacements.get(resource.index)
-
-            if replacement is None:
-                source.seek(resource.info.offset)
-                original = source.read(resource.info.stored_size)
-
-                if len(original) != resource.info.stored_size:
-                    raise IOError(
-                        f"Could not read original resource "
-                        f"#{resource.index}"
-                    )
-
-                target.write(original)
-                continue
-
-            decoded = collect_replacement_data(
-                package,
-                resource,
-                replacement,
-            )
-
-            if is_script_resource(resource):
-                decoded = process_script_pack(decoded)
-
-            packed = pack_mode1_resource(decoded)
-            target.write(packed)
-
-    return output
-
 
 # ---------------------------------------------------------------------------
 # Package defragmentation
@@ -2556,9 +2441,11 @@ class MainFrame(wx.Frame):
         menu_bar.Append(file_menu, "File")
 
         tools_menu = wx.Menu()
-        converters_menu = wx.Menu()
-        tools_converters = converters_menu.Append(wx.ID_ANY, "Texture Converter...\tCtrl+1")
-        tools_menu.AppendSubMenu(converters_menu, 'Additional')
+        tools_add_menu = wx.Menu()
+        tools_tex_converter = tools_add_menu.Append(wx.ID_ANY, "Texture Converter...\tCtrl+1")
+        tools_add_menu.AppendSeparator()
+        tools_loc_editor = tools_add_menu.Append(wx.ID_ANY, "Localization Editor...")
+        tools_menu.AppendSubMenu(tools_add_menu, 'Additional')
         tools_menu.AppendSeparator()
         file_defragment = tools_menu.Append(wx.ID_ANY, "Package Optimization")
         menu_bar.Append(tools_menu, "Tools")
@@ -2574,7 +2461,8 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self.open_package, file_open)
         self.Bind(wx.EVT_MENU, self.extract_selected, file_extract)
         self.Bind(wx.EVT_MENU, self.pack, file_pack)
-        self.Bind(wx.EVT_MENU, self.open_texture_converter, tools_converters)
+        self.Bind(wx.EVT_MENU, self.open_texture_converter, tools_tex_converter)
+        self.Bind(wx.EVT_MENU, self.open_localization_editor, tools_loc_editor)
         self.Bind(wx.EVT_MENU, self.defragment, file_defragment)
         self.Bind(wx.EVT_MENU, self.on_exit, file_exit)
         self.Bind(wx.EVT_MENU, self.show_about, help_about)
@@ -2666,6 +2554,10 @@ class MainFrame(wx.Frame):
             dv.EVT_DATAVIEW_ITEM_ACTIVATED,
             self.extract_selected,
         )
+
+    def open_localization_editor(self, event):
+        self.loc_editor = LocalizationEditor(self)
+        self.loc_editor.ShowModal()
 
     def open_texture_converter(self, event):
         self.texture_conv = TextureConverter(self)
@@ -3191,7 +3083,7 @@ class MainFrame(wx.Frame):
     def show_about(self, event=None):
         wx.MessageBox(
             f"{APP_NAME}\n\n"
-            "A tool for working with game archives for MX vs ATV Reflex in the .package format.\n\nVersion: 1.3.1\nAuthor: Daniil Korochansky\nLicense: GPLv3.0",
+            "A tool for working with game archives for MX vs ATV Reflex in the .package format.\n\nVersion: 1.3.2\nAuthor: Daniil Korochansky\nLicense: GPLv3.0",
             "About",
             wx.OK | wx.ICON_INFORMATION,
         )
