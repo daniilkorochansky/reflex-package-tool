@@ -52,6 +52,7 @@ Optimizing the .package file by repackaging the used data blocks into a new .pac
 + **.texture** - Textures for jersey suits, graphic kits, track objects, and so on. A built-in texture converter for converting between `.texture` and `.dds` formats.
 + **.bxml** - Including the `.material`, `.uicmpnt`, and `.adv` resources. These can be edited in the [Reflex Package Tool](https://github.com/daniilkorochansky/reflex-bxml-editor).
 + **.bink** - Bink video file in the .bik format. These are the videos that are shown on large stadium screens and elsewhere. Using Rad Video Tools, you can convert .mp4 files to the .bik format.
++ **.script** - Lua code for the game’s UI logic.
 
 #### Not supported
 + **.model** - This may be a configuration that describes which resources the 3D model uses and its parameters?
@@ -60,8 +61,9 @@ Optimizing the .package file by repackaging the used data blocks into a new .pac
 + **.tree** - ?
 + **.forest** - ?
 + **.water** - ?
-+ **icongeom** - ?
-+ **tdf** - ?
++ **.icongeom** - ?
++ **.tdf** - ?
++ **.texatlas** - ?
 
 ## Other Tools
 + [Reflex BXML Editor](https://github.com/daniilkorochansky/reflex-bxml-editor): It allows you to edit `.bxml`, `.database`, `.level` and `savegame.bxml` files and rebuild them.
