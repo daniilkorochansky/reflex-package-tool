@@ -59,13 +59,15 @@ Optimizing the .package file by repackaging the used data blocks into a new .pac
 + **.surface** - Equivalent to `.mesh`
 + **.sound** - It may describe which audio file, where, and when to play it?
 + **.anim** - Animation file
-+ **.shader** - ?
++ **.localiz** - Strings and localization keys
++ **.shader** - Shaders responsible for displaying objects and visual effects.
 + **.tree** - ?
 + **.forest** - ?
 + **.water** - ?
 + **.icongeom** - ?
 + **.tdf** - ?
 + **.texatlas** - ?
++ **.cell** - ?
 
 ## Other Tools
 + [Reflex BXML Editor](https://github.com/daniilkorochansky/reflex-bxml-editor): It allows you to edit `.bxml`, `.database`, `.level` and `savegame.bxml` files and rebuild them.
