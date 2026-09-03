@@ -60,7 +60,7 @@ Optimizing the .package file by repackaging the used data blocks into a new .pac
 + **.sound** - It may describe which audio file, where, and when to play it?
 + **.anim** - Animation file
 + **.localiz** - Strings and localization keys
-+ **.shader** - Shaders responsible for displaying objects and visual effects.
++ **.shader** - Shaders responsible for visual effects.
 + **.tree** - ?
 + **.forest** - ?
 + **.water** - ?
