@@ -62,13 +62,14 @@ Optimizing the .package file by repackaging the used data blocks into a new .pac
 + **.sound** - It may describe which audio file, where, and when to play it?
 + **.anim** - Animation file
 + **.shader** - Shaders responsible for visual effects.
++ **.cell** - Description of font glyph cells
++ **.texatlas** - Describes a set of rectangular areas within the font’s texture atlas.
 + **.tree** - ?
 + **.forest** - ?
 + **.water** - ?
 + **.icongeom** - ?
 + **.tdf** - ?
-+ **.texatlas** - ?
-+ **.cell** - ?
+
 
 ## Other Tools
 + [Reflex BXML Editor](https://github.com/daniilkorochansky/reflex-bxml-editor): It allows you to edit `.bxml`, `.database`, `.level` and `savegame.bxml` files and rebuild them.
