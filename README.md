@@ -53,6 +53,7 @@ Optimizing the .package file by repackaging the used data blocks into a new .pac
 + **.bink** - Bink video file in the .bik format. These are the videos that are shown on large stadium screens and elsewhere. Using Rad Video Tools, you can convert .mp4 files to the .bik format.
 + **.script** - Lua code for the game’s UI logic.
 + **.localiz** - Strings and localization keys. Edited using the built‑in Localization Editor.
++ **.soundbnk** - Sound Bank
 
 #### Not supported
 + **.model** - This may be a configuration that describes which resources the 3D model uses and its parameters?
